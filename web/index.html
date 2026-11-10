@@ -1,0 +1,576 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover,user-scalable=no">
+<title>Crux Wall</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@600;800&family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@500&display=swap">
+<style>
+/* Layout: one full-screen wall. HUD and coach line float at the top in type big enough to read from 2-3 m;
+   menus live in a single overlay card. */
+:root{
+  --ply:#1d1b19; --ply-2:#26231f;
+  --chalk:#f1ede6; --dust:#9a938a;
+  --tape:#ffcf3a;
+  --left:#3ec7ff; --right:#ff7a45;
+  --ok:#5ee08a; --warn:#ffb020; --bad:#ff4d5e;
+  --display:"Barlow Condensed","Arial Narrow",Arial,sans-serif;
+  --body:"Inter",system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;
+  --mono:"JetBrains Mono",ui-monospace,Menlo,Consolas,monospace;
+  color-scheme:dark;
+}
+*{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+html,body{height:100%;margin:0;overflow:hidden}
+body{background:var(--ply);color:var(--chalk);font:15px/1.45 var(--body);user-select:none}
+#stage{position:fixed;inset:0;background:var(--ply-2);touch-action:none}
+canvas#view{position:absolute;inset:0;width:100%;height:100%;display:block}
+video{display:none}
+
+.hud{position:absolute;left:0;right:0;top:0;display:flex;flex-direction:column;gap:8px;
+  padding:calc(env(safe-area-inset-top,0px) + 10px) max(16px,env(safe-area-inset-right,0px)) 10px max(16px,env(safe-area-inset-left,0px));
+  background:linear-gradient(#000c,#0000);pointer-events:none}
+.hud-row{display:flex;align-items:flex-end;gap:clamp(14px,4vw,32px)}
+.hud-stat{display:flex;flex-direction:column;min-width:0}
+.hud-stat small{font:600 11px/1 var(--body);letter-spacing:.12em;text-transform:uppercase;color:var(--dust)}
+.hud-stat b{font:800 clamp(30px,7vw,52px)/1 var(--display);font-variant-numeric:tabular-nums;letter-spacing:.01em}
+.hud-stat.big b{font-size:clamp(40px,10vw,72px);color:var(--tape)}
+.hud-spacer{flex:1}
+.menu-btn{pointer-events:auto;align-self:flex-start}
+.pump{height:12px;border-radius:6px;background:#ffffff22;overflow:hidden}
+.pump i{display:block;height:100%;width:0;background:linear-gradient(90deg,var(--ok),var(--warn),var(--bad));transition:width .15s}
+.coach{font:800 clamp(22px,5.5vw,38px)/1.1 var(--display);text-transform:uppercase;letter-spacing:.02em;
+  text-shadow:0 2px 8px #000;min-height:1.1em;color:var(--chalk)}
+.coach.good{color:var(--ok)} .coach.warn{color:var(--warn)} .coach.bad{color:var(--bad)}
+
+button{font:600 15px var(--body);color:var(--chalk);background:#ffffff12;border:1px solid #ffffff2a;border-radius:8px;padding:12px 14px;cursor:pointer;min-height:48px}
+button:hover{background:#ffffff1e}
+button:focus-visible{outline:2px solid var(--tape);outline-offset:2px}
+button.on,button.primary{background:var(--tape);color:#1d1b19;border-color:var(--tape)}
+button.primary{font-size:17px}
+.menu-btn{min-height:44px;padding:8px 14px;background:#0008}
+
+.overlay{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;overflow-y:auto;
+  padding:calc(env(safe-area-inset-top,0px) + 24px) max(16px,env(safe-area-inset-right,0px)) calc(env(safe-area-inset-bottom,0px) + 24px) max(16px,env(safe-area-inset-left,0px));
+  background:#1d1b19ee}
+.card{width:100%;max-width:440px;display:flex;flex-direction:column;gap:16px;margin:auto}
+.card h2{font:800 46px/1 var(--display);text-transform:uppercase;margin:0}
+.card h2 span{color:var(--tape)}
+.card p{margin:0;color:#d8d2c8}
+.card ol{margin:0;padding-left:20px;color:#d8d2c8;display:flex;flex-direction:column;gap:6px}
+.label{font:600 11px/1 var(--body);letter-spacing:.12em;text-transform:uppercase;color:var(--dust);margin-bottom:8px}
+.row{display:flex;gap:8px}
+.row>*{flex:1}
+.summary{display:grid;grid-template-columns:repeat(2,1fr);gap:10px}
+.summary div{background:#ffffff0a;border:1px solid #ffffff14;border-radius:8px;padding:10px 12px}
+.summary b{display:block;font:500 24px/1.1 var(--mono);font-variant-numeric:tabular-nums;margin-top:6px}
+.hint{font-size:13px;color:var(--dust)}
+@media (prefers-reduced-motion:reduce){.pump i{transition:none}}
+</style>
+</head>
+<body>
+<div id="stage">
+  <canvas id="view"></canvas>
+  <video id="cam" playsinline muted></video>
+
+  <div class="hud" id="hud" hidden>
+    <div class="hud-row">
+      <div class="hud-stat big"><small>Height</small><b id="sHeight">0.0m</b></div>
+      <div class="hud-stat"><small>Moves</small><b id="sMoves">0/8</b></div>
+      <div class="hud-stat"><small>Time</small><b id="sTime">0:00</b></div>
+      <div class="hud-spacer"></div>
+      <button class="menu-btn" id="menuBtn" aria-label="Pause and open menu">Menu</button>
+    </div>
+    <div class="pump" aria-label="Pump"><i id="pump"></i></div>
+    <div class="coach" id="coach" aria-live="polite"></div>
+  </div>
+
+  <div class="overlay" id="menu">
+    <div class="card">
+      <h2 id="menuTitle">Crux <span>Wall</span></h2>
+      <p id="menuLead">A camera climbing trainer. Your hands climb, your feet keep you on the wall.</p>
+      <div class="summary" id="summary" hidden>
+        <div><span class="label">Height</span><b id="rHeight">–</b></div>
+        <div><span class="label">Time</span><b id="rTime">–</b></div>
+        <div><span class="label">On balance</span><b id="rBal">–</b></div>
+        <div><span class="label">Moves</span><b id="rMoves">–</b></div>
+      </div>
+      <ol id="howto">
+        <li>Prop the phone up and step back 2–3 m. Frame yourself from raised hands down to your feet.</li>
+        <li>The route starts once the camera sees your whole body.</li>
+        <li>Reach the glowing hold with the matching hand (L blue, R orange) and keep it there to grab.</li>
+        <li>Pull it down to chest height. That's one move up the wall.</li>
+        <li>Keep your hips over your feet. Leaning out of your base fills the pump bar.</li>
+      </ol>
+      <div>
+        <div class="label">Grade</div>
+        <div class="row" id="grades">
+          <button data-g="V0" class="on">V0</button>
+          <button data-g="V2">V2</button>
+          <button data-g="V4">V4</button>
+        </div>
+      </div>
+      <button id="voice" aria-pressed="false">Voice coach: off</button>
+      <button class="primary" id="startCam">Start climbing</button>
+      <button id="startDemo">Try with touch or mouse</button>
+      <p class="hint" id="status">Pose tracking runs on this device. Video is never uploaded.</p>
+    </div>
+  </div>
+</div>
+
+<script type="module">
+const $ = (id) => document.getElementById(id);
+const canvas = $("view"), ctx = canvas.getContext("2d"), video = $("cam"), stage = $("stage");
+const bridge = window.AndroidBridge || null;          // present inside the Android app
+
+const GRADES = {
+  V0: { moves: 8,  holdR: 0.42, reach: 0.6, dwell: 300, balMargin: 0.35, pumpRate: 0.6 },
+  V2: { moves: 10, holdR: 0.30, reach: 0.9, dwell: 450, balMargin: 0.22, pumpRate: 1.0 },
+  V4: { moves: 12, holdR: 0.20, reach: 1.2, dwell: 600, balMargin: 0.12, pumpRate: 1.5 },
+};
+const SHOULDER_M = 0.40;              // assumed real shoulder width, converts pixels to metres
+const READY_MS = 1500;                // full body visible this long before the route starts
+let grade = "V0";
+
+// ---------- Pose source ----------
+const MP_VERSION = "0.10.14";
+const CDN = `https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@${MP_VERSION}/`;
+const MODEL_CDN = (v) => `https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_${v}/float16/1/pose_landmarker_${v}.task`;
+let landmarker = null, mode = null;    // mode: "cam" | "demo" | null
+let paused = true;
+const L = { nose:0, ls:11, rs:12, le:13, re:14, lw:15, rw:16, li:19, ri:20, lh:23, rh:24, lk:25, rk:26, la:27, ra:28 };
+let pose = null;
+const pointer = { x: 0, y: 0 };
+
+async function loadVision() {
+  // The Android build bundles MediaPipe under vendor/; a plain browser falls back to the CDN.
+  const local = new URL("vendor/", location.href).href;
+  try {
+    const mod = await import(local + "vision_bundle.mjs");
+    return { mod, wasm: local + "wasm", model: (v) => local + `pose_landmarker_${v}.task` };
+  } catch {
+    const mod = await import(CDN + "vision_bundle.mjs");
+    return { mod, wasm: CDN + "wasm", model: MODEL_CDN };
+  }
+}
+
+async function createLandmarker() {
+  const { mod, wasm, model } = await loadVision();
+  const files = await mod.FilesetResolver.forVisionTasks(wasm);
+  const opts = (variant, delegate) => ({
+    baseOptions: { modelAssetPath: model(variant), delegate },
+    runningMode: "VIDEO", numPoses: 1,
+  });
+  try { return await mod.PoseLandmarker.createFromOptions(files, opts("full", "GPU")); }
+  catch (e) { console.warn("GPU delegate failed, using CPU with the lite model", e); }
+  return mod.PoseLandmarker.createFromOptions(files, opts("lite", "CPU"));
+}
+
+async function startCamera() {
+  const status = $("status");
+  try {
+    if (!landmarker) { status.textContent = "Loading pose model…"; landmarker = await createLandmarker(); }
+    if (!video.srcObject) {
+      status.textContent = "Asking for the camera…";
+      const portrait = innerHeight > innerWidth;
+      const stream = await navigator.mediaDevices.getUserMedia({
+        video: { facingMode: "user", width: { ideal: portrait ? 720 : 1280 }, height: { ideal: portrait ? 1280 : 720 } },
+        audio: false,
+      });
+      video.srcObject = stream;
+      await video.play();
+    }
+    mode = "cam"; startRoute();
+  } catch (e) {
+    console.error(e);
+    status.textContent = "Couldn't start the camera: " + (e.message || e) + ". Allow camera access and try again.";
+  }
+}
+
+function videoRect() {
+  const W = canvas.width, H = canvas.height;
+  const vw = video.videoWidth || 9, vh = video.videoHeight || 16;
+  const s = Math.max(W / vw, H / vh);
+  return { x: (W - vw * s) / 2, y: (H - vh * s) / 2, w: vw * s, h: vh * s };
+}
+
+let lastVideoTime = -1;
+function readCameraPose() {
+  if (!landmarker || video.readyState < 2 || video.currentTime === lastVideoTime) return;
+  lastVideoTime = video.currentTime;
+  const res = landmarker.detectForVideo(video, performance.now());
+  const lm = res.landmarks && res.landmarks[0];
+  if (!lm) { pose = null; return; }
+  const r = videoRect();
+  smooth(lm.map(p => ({ x: r.x + (1 - p.x) * r.w, y: r.y + p.y * r.h, v: p.visibility ?? 1 })));
+}
+
+function demoPose() {
+  const W = canvas.width, H = canvas.height, sw = Math.min(H * 0.1, W * 0.22);
+  const cx = W / 2, sy = H * 0.45;
+  const sway = Math.sin(performance.now() / 1400) * sw * 0.25;
+  const pts = Array.from({ length: 33 }, () => ({ x: cx, y: sy, v: 0 }));
+  const set = (i, x, y) => pts[i] = { x, y, v: 1 };
+  set(L.nose, cx + sway * 0.5, sy - sw * 0.9);
+  set(L.ls, cx - sw / 2 + sway * 0.4, sy); set(L.rs, cx + sw / 2 + sway * 0.4, sy);
+  set(L.lh, cx - sw * 0.35 + sway * 0.2, sy + sw * 1.4); set(L.rh, cx + sw * 0.35 + sway * 0.2, sy + sw * 1.4);
+  set(L.lk, cx - sw * 0.45, sy + sw * 2.2); set(L.rk, cx + sw * 0.45, sy + sw * 2.2);
+  set(L.la, cx - sw * 0.5, sy + sw * 3); set(L.ra, cx + sw * 0.5, sy + sw * 3);
+  const active = route.target ? route.target.hand : "l";
+  const restL = { x: cx - sw * 0.9, y: sy - sw * 0.6 }, restR = { x: cx + sw * 0.9, y: sy - sw * 0.6 };
+  const lw = active === "l" ? pointer : restL, rw = active === "r" ? pointer : restR;
+  set(L.lw, lw.x, lw.y); set(L.rw, rw.x, rw.y); set(L.li, lw.x, lw.y); set(L.ri, rw.x, rw.y);
+  set(L.le, (lw.x + pts[L.ls].x) / 2 - sw * 0.2, (lw.y + sy) / 2 + sw * 0.2);
+  set(L.re, (rw.x + pts[L.rs].x) / 2 + sw * 0.2, (rw.y + sy) / 2 + sw * 0.2);
+  smooth(pts);
+}
+
+function smooth(pts) {
+  if (!pose) { pose = pts; return; }
+  const a = 0.55;
+  pose = pts.map((p, i) => ({ x: pose[i].x + (p.x - pose[i].x) * a, y: pose[i].y + (p.y - pose[i].y) * a, v: p.v }));
+}
+
+// ---------- Body metrics ----------
+function body() {
+  if (!pose) return null;
+  const P = pose, mid = (a, b) => ({ x: (P[a].x + P[b].x) / 2, y: (P[a].y + P[b].y) / 2 });
+  const sh = mid(L.ls, L.rs), hip = mid(L.lh, L.rh);
+  const sw = Math.max(Math.hypot(P[L.ls].x - P[L.rs].x, P[L.ls].y - P[L.rs].y), 30);
+  const hand = (s) => {
+    const w = P[s === "l" ? L.lw : L.rw], f = P[s === "l" ? L.li : L.ri];
+    return { x: (w.x + f.x) / 2, y: (w.y + f.y) / 2 };
+  };
+  const feetSeen = P[L.la].v > 0.5 && P[L.ra].v > 0.5;
+  const com = { x: hip.x * 0.6 + sh.x * 0.4, y: hip.y * 0.6 + sh.y * 0.4 };
+  const fx1 = Math.min(P[L.la].x, P[L.ra].x), fx2 = Math.max(P[L.la].x, P[L.ra].x);
+  const margin = GRADES[grade].balMargin * sw;
+  let out = 0;
+  if (com.x < fx1 - margin) out = (fx1 - margin - com.x) / sw;
+  if (com.x > fx2 + margin) out = (com.x - fx2 - margin) / sw;
+  return { sh, hip, sw, com, hand, feetSeen, fx1, fx2, margin, out, stance: (fx2 - fx1) / sw,
+           ankles: [P[L.la], P[L.ra]], visible: P[L.ls].v > 0.5 && P[L.rs].v > 0.5 };
+}
+
+// ---------- Route state ----------
+const route = {};
+function resetRoute() {
+  Object.assign(route, {
+    ready: false, readySince: 0, moves: 0, heightM: 0, wallM: 0, startT: 0, endT: 0, pump: 0,
+    fallen: false, topped: false, target: null, phase: "reach", dwellT: 0, grabY: 0, nextHand: "l",
+    balFrames: 0, onBalFrames: 0, feetMove: 0, feetFrames: 0, lastAnkles: null, pullStart: 0,
+  });
+  lastSaid = {};
+  makeDeco();
+}
+function startRoute() {
+  resetRoute();
+  $("menu").hidden = true; $("hud").hidden = false; paused = false;
+  say(mode === "demo" ? "Move your finger or cursor to steer the active hand." : "Step back until I can see you head to feet.", "", true);
+}
+function openMenu(kind) {
+  paused = true;
+  $("menu").hidden = false;
+  const done = kind === "fell" || kind === "top";
+  $("summary").hidden = !done;
+  $("howto").hidden = done;
+  $("menuTitle").innerHTML = kind === "top" ? `Topped <span>${grade}</span>` : kind === "fell" ? "Pumped <span>out</span>" : kind === "pause" ? "Paused" : "Crux <span>Wall</span>";
+  $("menuLead").textContent = done ? tip() : kind === "pause" ? "Take a breath. Pick up where you left off or change the grade." : "A camera climbing trainer. Your hands climb, your feet keep you on the wall.";
+  $("startCam").textContent = kind === "pause" ? "Resume" : done ? "Climb again" : "Start climbing";
+  if (done) {
+    $("rHeight").textContent = route.heightM.toFixed(1) + " m";
+    $("rTime").textContent = fmtTime((route.endT - (route.startT || route.endT)) / 1000);
+    $("rBal").textContent = route.balFrames ? Math.round(100 * route.onBalFrames / route.balFrames) + "%" : "–";
+    $("rMoves").textContent = `${route.moves} / ${GRADES[grade].moves}`;
+  }
+  $("menu").dataset.kind = kind;
+}
+
+function spawnTarget(b) {
+  const g = GRADES[grade], hand = route.nextHand, side = hand === "l" ? -1 : 1;
+  const W = canvas.width, r = g.holdR * b.sw;
+  const topLimit = hudBottom() + r + 10;
+  let x = b.sh.x + side * b.sw * (0.3 + Math.random() * 0.5 * g.reach);
+  let y = b.sh.y - b.sw * (1.3 + Math.random() * 0.6 * g.reach);
+  x = Math.max(r + 10, Math.min(W - r - 10, x)); y = Math.max(topLimit, y);
+  route.target = { hand, x, y, r, homeY: y, shape: Math.floor(Math.random() * 3) };
+  route.phase = "reach"; route.dwellT = 0;
+}
+function hudBottom() {
+  const dpr = canvas.width / Math.max(1, stage.clientWidth);
+  return $("hud").hidden ? 0 : $("hud").getBoundingClientRect().bottom * dpr;
+}
+
+// ---------- Main loop ----------
+let lastT = performance.now();
+function frame(now) {
+  const dt = Math.min(0.1, (now - lastT) / 1000); lastT = now;
+  fit();
+  if (mode === "cam") readCameraPose(); else if (mode === "demo") demoPose();
+  const b = body();
+  if (mode && !paused) update(b, dt, now);
+  draw(b, now);
+  requestAnimationFrame(frame);
+}
+
+function update(b, dt, now) {
+  if (route.fallen || route.topped) return;
+  const g = GRADES[grade];
+  const fullBody = b && b.visible && (b.feetSeen || mode === "demo");
+
+  // Wait for the whole body before starting, so the climber can walk back from the phone.
+  if (!route.ready) {
+    if (!fullBody) { route.readySince = 0; say(b && b.visible ? "Step back. I need to see your feet." : "Step into the frame.", "warn"); return; }
+    route.readySince ||= now;
+    if (now - route.readySince < READY_MS) return;
+    route.ready = true; route.startT = now;
+    say("Ready. Climb!", "good", true);
+  }
+  if (!b || !b.visible) { say("I lost you. Step back into the frame.", "warn"); return; }
+  if (!b.feetSeen && mode === "cam") say("Feet out of frame. Step back.", "warn");
+
+  // Balance and feet
+  if (b.feetSeen) {
+    route.balFrames++;
+    if (b.out <= 0) route.onBalFrames++;
+    if (b.out > 0.05) say(b.com.x < b.fx1 ? "Hips drifting left. Get over your feet." : "Hips drifting right. Get over your feet.", "warn");
+    if (b.stance < 0.5) say("Widen your feet to shoulder width.", "warn");
+    const a = b.ankles.map(p => ({ x: p.x, y: p.y }));
+    if (route.lastAnkles && route.phase === "pull") {
+      const d = (Math.hypot(a[0].x - route.lastAnkles[0].x, a[0].y - route.lastAnkles[0].y) +
+                 Math.hypot(a[1].x - route.lastAnkles[1].x, a[1].y - route.lastAnkles[1].y)) / b.sw;
+      route.feetMove += d; route.feetFrames++;
+      if (d / dt > 1.6) say("Quiet feet. Keep them planted.", "warn");
+    }
+    route.lastAnkles = a;
+  }
+
+  // Pump: rises when off balance or hanging in a long pull, drains while balanced
+  let dp = -6;
+  if (b.out > 0) dp += 40 * g.pumpRate * Math.min(1, b.out * 3);
+  if (route.phase === "pull" && now - route.pullStart > 2500) dp += 12 * g.pumpRate;
+  route.pump = Math.max(0, Math.min(100, route.pump + dp * dt));
+  if (route.pump >= 100) return finish("fell", now);
+  if (route.pump > 70) say("Pumped! Hips over feet, shake out.", "bad");
+
+  if (!route.target) { spawnTarget(b); return; }
+  const t = route.target, hand = b.hand(t.hand);
+  const dist = Math.hypot(hand.x - t.x, hand.y - t.y);
+
+  if (route.phase === "reach") {
+    if (dist < t.r * 1.15) {
+      route.dwellT += dt * 1000;
+      if (route.dwellT >= g.dwell) {
+        route.phase = "pull"; route.grabY = hand.y; route.pullStart = now;
+        say("Got it. Pull it down to your chest.", "good");
+      }
+    } else {
+      route.dwellT = Math.max(0, route.dwellT - dt * 2000);
+      const other = b.hand(t.hand === "l" ? "r" : "l");
+      if (Math.hypot(other.x - t.x, other.y - t.y) < t.r) say(`Wrong hand. Use your ${t.hand === "l" ? "left" : "right"}.`, "warn");
+    }
+  } else if (route.phase === "pull") {
+    const targetY = b.sh.y + b.sw * 0.35;
+    if (Math.abs(hand.x - t.x) > t.r * 2.2 || hand.y < route.grabY - t.r * 1.5) {
+      route.phase = "reach"; route.dwellT = 0; t.y = t.homeY;
+      say("Slipped off. Re-grab and pull straight down.", "bad");
+      return;
+    }
+    t.y = Math.max(t.homeY, hand.y);
+    const prog = Math.max(0, Math.min(1, (t.y - t.homeY) / Math.max(1, targetY - t.homeY)));
+    const moveM = (targetY - t.homeY) / b.sw * SHOULDER_M;
+    route.wallM = route.heightM + prog * moveM;
+    if (prog >= 1) {
+      route.heightM += moveM; route.wallM = route.heightM; route.moves++;
+      const secs = (now - route.pullStart) / 1000;
+      if (route.moves >= g.moves) return finish("top", now);
+      say(secs < 1.5 ? `Move ${route.moves}. Smooth pull.` : `Move ${route.moves}. Try one faster pull.`, "good");
+      route.nextHand = t.hand === "l" ? "r" : "l";
+      route.target = null;
+    }
+  }
+}
+
+function finish(kind, now) {
+  route.endT = now;
+  if (kind === "top") route.topped = true; else route.fallen = true;
+  say(kind === "top" ? `Top! ${route.heightM.toFixed(1)} metres. ${tip()}` : `You fell at ${route.heightM.toFixed(1)} metres. ${tip()}`, kind === "top" ? "good" : "bad", true);
+  setTimeout(() => openMenu(kind), 1800);
+}
+function tip() {
+  const bal = route.balFrames ? route.onBalFrames / route.balFrames : 1;
+  const feet = route.feetFrames ? route.feetMove / route.feetFrames : 0;
+  if (bal < 0.75) return "Biggest gain: keep your hips between your feet when you reach.";
+  if (feet > 0.02) return "Biggest gain: quieter feet while you pull.";
+  return "Clean climbing. Try the next grade.";
+}
+
+// ---------- Coach line + voice ----------
+let lastSaid = {}, voiceOn = !!bridge;
+function say(msg, kind = "", force = false) {
+  const now = performance.now();
+  if (!force && lastSaid[msg] && now - lastSaid[msg] < 5000) return;
+  if (!force && now - (lastSaid.__any || 0) < 1500) return;
+  lastSaid[msg] = now; lastSaid.__any = now;
+  const el = $("coach"); el.textContent = msg; el.className = "coach " + kind;
+  if (!voiceOn) return;
+  if (bridge) bridge.speak(msg);
+  else if ("speechSynthesis" in window) { speechSynthesis.cancel(); speechSynthesis.speak(new SpeechSynthesisUtterance(msg)); }
+}
+function setVoice(on) {
+  voiceOn = on;
+  $("voice").textContent = "Voice coach: " + (on ? "on" : "off");
+  $("voice").setAttribute("aria-pressed", on);
+  $("voice").classList.toggle("on", on);
+}
+
+// ---------- Drawing ----------
+let deco = [];
+function makeDeco() {
+  deco = Array.from({ length: 70 }, () => ({
+    x: Math.random(), y: Math.random() * 25, s: 0.5 + Math.random(),
+    c: ["#6a5acd", "#2e8b57", "#c0392b", "#e0a800", "#8e44ad", "#16a085"][Math.floor(Math.random() * 6)],
+    rot: Math.random() * 6.28,
+  }));
+}
+
+function fit() {
+  const dpr = Math.min(window.devicePixelRatio || 1, 2);
+  const w = Math.round(stage.clientWidth * dpr), h = Math.round(stage.clientHeight * dpr);
+  if (canvas.width !== w || canvas.height !== h) { canvas.width = w; canvas.height = h; }
+}
+
+function draw(b, now) {
+  const W = canvas.width, H = canvas.height;
+  ctx.fillStyle = "#26231f"; ctx.fillRect(0, 0, W, H);
+  const pxPerM = b ? b.sw / SHOULDER_M : H / 4;
+  const wallM = route.wallM || 0;
+  // plywood seams every 1.22 m (a standard sheet) and a 20 cm T-nut grid
+  ctx.strokeStyle = "#ffffff10"; ctx.lineWidth = 2;
+  for (let m = Math.floor(wallM / 1.22) * 1.22 - 1.22; m < wallM + H / pxPerM + 2; m += 1.22) {
+    const y = H - (m - wallM) * pxPerM; ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(W, y); ctx.stroke();
+  }
+  ctx.fillStyle = "#ffffff14";
+  const step = 0.2 * pxPerM, off = (wallM * pxPerM) % step;
+  for (let y = off; y < H; y += step) for (let x = step / 2; x < W; x += step) { ctx.beginPath(); ctx.arc(x, y, 1.5, 0, 6.28); ctx.fill(); }
+
+  if (mode === "cam" && video.readyState >= 2) {
+    const r = videoRect();
+    ctx.save(); ctx.globalAlpha = 0.35; ctx.translate(r.x + r.w, r.y); ctx.scale(-1, 1);
+    ctx.drawImage(video, 0, 0, r.w, r.h); ctx.restore();
+  }
+  for (const d of deco) {
+    const y = H - (((d.y - wallM) % 25) + 25) % 25 * pxPerM;
+    if (y < -40 || y > H + 40) continue;
+    holdShape(d.x * W, y, d.s * pxPerM * 0.06, d.c, 0.45, d.rot, 0);
+  }
+
+  if (b && mode) drawBody(b);
+
+  const t = route.target;
+  if (t && mode && !route.fallen && !route.topped) {
+    const col = t.hand === "l" ? "#3ec7ff" : "#ff7a45";
+    const pulse = route.phase === "reach" ? 1 + Math.sin(now / 180) * 0.06 : 1;
+    ctx.save(); ctx.shadowColor = col; ctx.shadowBlur = 30;
+    holdShape(t.x, t.y, t.r * pulse, col, 1, 0, t.shape); ctx.restore();
+    if (route.phase === "reach" && route.dwellT > 0) {
+      ctx.strokeStyle = "#f1ede6"; ctx.lineWidth = 6;
+      ctx.beginPath(); ctx.arc(t.x, t.y, t.r + 10, -Math.PI / 2, -Math.PI / 2 + 6.283 * route.dwellT / GRADES[grade].dwell); ctx.stroke();
+    }
+    ctx.fillStyle = "#1d1b19"; ctx.font = `800 ${Math.max(16, t.r * 0.7)}px "Barlow Condensed", sans-serif`;
+    ctx.textAlign = "center"; ctx.textBaseline = "middle"; ctx.fillText(t.hand.toUpperCase(), t.x, t.y);
+    if (route.phase === "pull" && b) {
+      const ty = b.sh.y + b.sw * 0.35;
+      ctx.setLineDash([10, 10]); ctx.strokeStyle = "#ffcf3a"; ctx.lineWidth = 4;
+      ctx.beginPath(); ctx.moveTo(t.x - 70, ty); ctx.lineTo(t.x + 70, ty); ctx.stroke(); ctx.setLineDash([]);
+      ctx.fillStyle = "#ffcf3a"; ctx.font = `600 ${Math.round(18 * (W / stage.clientWidth))}px Inter, sans-serif`;
+      ctx.fillText("PULL TO HERE", t.x, ty + 26);
+    }
+  }
+
+  // ready countdown ring around the body while waiting to start
+  if (mode && !paused && !route.ready && route.readySince && b) {
+    const p = Math.min(1, (now - route.readySince) / READY_MS);
+    ctx.strokeStyle = "#ffcf3a"; ctx.lineWidth = 8;
+    ctx.beginPath(); ctx.arc(b.sh.x, b.sh.y - b.sw, b.sw * 0.5, -Math.PI / 2, -Math.PI / 2 + 6.283 * p); ctx.stroke();
+  }
+
+  updateHud(now);
+}
+
+function holdShape(x, y, r, color, alpha, rot, shape) {
+  ctx.save(); ctx.globalAlpha = alpha; ctx.translate(x, y); ctx.rotate(rot); ctx.fillStyle = color;
+  ctx.beginPath();
+  const n = 9;
+  for (let i = 0; i <= n; i++) {
+    const a = (i / n) * 6.283, k = shape === 1 ? 1 + 0.25 * Math.sin(a * 3) : shape === 2 ? 1 + 0.18 * Math.cos(a * 2) : 1 + 0.1 * Math.sin(a * 5);
+    const px = Math.cos(a) * r * k * 1.15, py = Math.sin(a) * r * k * 0.9;
+    i ? ctx.lineTo(px, py) : ctx.moveTo(px, py);
+  }
+  ctx.closePath(); ctx.fill();
+  ctx.fillStyle = "#0004"; ctx.beginPath(); ctx.arc(0, 0, r * 0.15, 0, 6.28); ctx.fill();
+  ctx.restore();
+}
+
+function drawBody(b) {
+  const P = pose;
+  const seg = [[L.ls, L.rs, "c"], [L.ls, L.le, "l"], [L.le, L.lw, "l"], [L.rs, L.re, "r"], [L.re, L.rw, "r"],
+               [L.ls, L.lh, "c"], [L.rs, L.rh, "c"], [L.lh, L.rh, "c"], [L.lh, L.lk, "c"], [L.lk, L.la, "c"], [L.rh, L.rk, "c"], [L.rk, L.ra, "c"]];
+  const col = { l: "#3ec7ff", r: "#ff7a45", c: "#f1ede6" };
+  ctx.lineCap = "round"; ctx.lineWidth = Math.max(4, b.sw * 0.06);
+  for (const [a, c, k] of seg) {
+    if (P[a].v < 0.4 || P[c].v < 0.4) continue;
+    ctx.strokeStyle = col[k];
+    ctx.beginPath(); ctx.moveTo(P[a].x, P[a].y); ctx.lineTo(P[c].x, P[c].y); ctx.stroke();
+  }
+  for (const s of ["l", "r"]) {
+    const h = b.hand(s); ctx.fillStyle = col[s];
+    ctx.beginPath(); ctx.arc(h.x, h.y, b.sw * 0.1, 0, 6.28); ctx.fill();
+  }
+  if (!b.feetSeen) return;
+  // base of support between the ankles and a plumb line from the centre of mass
+  const fy = Math.max(b.ankles[0].y, b.ankles[1].y) + b.sw * 0.1;
+  const c = b.out > 0 ? "#ff4d5e" : "#5ee08a";
+  ctx.fillStyle = c + "33"; ctx.fillRect(b.fx1 - b.margin, fy - 8, b.fx2 - b.fx1 + 2 * b.margin, 16);
+  ctx.fillStyle = c; ctx.fillRect(b.fx1, fy - 3, b.fx2 - b.fx1, 6);
+  ctx.setLineDash([6, 8]); ctx.strokeStyle = c; ctx.lineWidth = 2;
+  ctx.beginPath(); ctx.moveTo(b.com.x, b.com.y); ctx.lineTo(b.com.x, fy); ctx.stroke(); ctx.setLineDash([]);
+  ctx.fillStyle = c; ctx.beginPath(); ctx.arc(b.com.x, b.com.y, b.sw * 0.09, 0, 6.28); ctx.fill();
+}
+
+function fmtTime(s) { s = Math.max(0, Math.floor(s)); return Math.floor(s / 60) + ":" + String(s % 60).padStart(2, "0"); }
+function updateHud(now) {
+  $("sHeight").textContent = (route.wallM || 0).toFixed(1) + "m";
+  $("sMoves").textContent = `${route.moves || 0}/${GRADES[grade].moves}`;
+  const t = route.startT ? ((route.endT || now) - route.startT) / 1000 : 0;
+  $("sTime").textContent = fmtTime(t);
+  $("pump").style.width = (route.pump || 0) + "%";
+}
+
+// ---------- Controls ----------
+$("startCam").onclick = () => {
+  if ($("menu").dataset.kind === "pause" && mode) { $("menu").hidden = true; paused = false; return; }
+  if (mode === "demo") { startRoute(); return; }
+  startCamera();
+};
+$("startDemo").onclick = () => { mode = "demo"; startRoute(); };
+$("menuBtn").onclick = () => openMenu("pause");
+$("voice").onclick = () => setVoice(!voiceOn);
+$("grades").onclick = (e) => {
+  const g = e.target.dataset.g; if (!g) return;
+  grade = g; for (const btn of $("grades").children) btn.classList.toggle("on", btn.dataset.g === g);
+  if ($("menu").dataset.kind === "pause") { $("menu").dataset.kind = "restart"; $("startCam").textContent = "Start climbing"; }
+};
+function trackPointer(e) {
+  const r = canvas.getBoundingClientRect(), k = canvas.width / r.width;
+  pointer.x = (e.clientX - r.left) * k; pointer.y = (e.clientY - r.top) * k;
+}
+stage.addEventListener("pointermove", trackPointer);
+stage.addEventListener("pointerdown", trackPointer);
+
+setVoice(voiceOn);
+resetRoute();
+openMenu("intro");
+requestAnimationFrame(frame);
+</script>
+</body>
+</html>
